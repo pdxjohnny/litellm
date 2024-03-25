@@ -13,6 +13,9 @@ from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
 from copy import deepcopy
 
+import scitt_emulator.create_statement
+import scitt_emulator.client
+
 import httpx
 import litellm
 from ._logging import verbose_logger
@@ -3996,12 +3999,13 @@ def stream_chunk_builder(
         end_time=end_time,
     )
 
+
 import snoop
+
 
 @snoop
 def validate_tool_use_and_function_calls(
-    self,
-    chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
+    self, chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ):
     # TODO Config setting to enable or disable tool usage / function call
     # validation. Config for this is the SCITT service endpoint and notary key
@@ -4013,6 +4017,7 @@ def validate_tool_use_and_function_calls(
     # OpenAPI spec, and adding those to LLMs on all proxied calls. These
     # services are Phase 4.
     import snoop
+
     snoop.pp(locals())
 
     # We need to submit to SCITT a statement with a payload which describes the
@@ -4025,44 +4030,151 @@ def validate_tool_use_and_function_calls(
         "tool_calls" in chunks[0]["choices"][0]["delta"]
         and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None
     ):
-        tool_call = make_tool_calls_list(chunks)
         # [{'id': 'call_BwSpvV9FFUZ7whChqqYS3o4R', 'function': {'arguments': '{"ticker":"INTC"}', 'name': 'historical_stock_prices'}, 'type': 'function'}]
         # [{'id': 'call_K760oMiZiz6dsxTfUAsdnZSp', 'function': {'arguments': '{"historical_stock_prices":"[[\\"2024-03-22\\", 42...[\\"2024-03-23\\", 52.0], [\\"2024-03-24\\", 62.0]]"}', 'name': 'forecast'}, 'type': 'function'}]
         # [{'id': 'call_tE6e6A93Vkf77uiJo1bKjk1E', 'function': {'arguments': '{"ticker":"INTC"}', 'name': 'historical_stock_prices'}, 'type': 'function'}]
         # [{'id': 'call_k98HPuu2KRSyl2YTZS7bceef', 'function': {'arguments': '{"historical_stock_prices":"[[\\"2024-03-22\\", 42...[\\"2024-03-23\\", 52.0], [\\"2024-03-24\\", 62.0]]"}', 'name': 'forecast'}, 'type': 'function'}]
-        with tempfile.TemporaryDirectory() as tempdir:
-            tempdir_path = pathlib.Path(tempdir)
-            statement_path = tempdir_path.joinpath("statement.cbor")
-            transparent_statement_path = tempdir_path.joinpath("transparent_statement.cbor")
-            entry_id_path = tempdir_path.joinpath("entry_id.txt")
-            url = 
-            issuer = 
-            subject = 
-            content_type = 
-            payload = 
-            private_key_pem_path = 
-            token = 
-            ca_cert = 
-            scitt_emulator.create_statement.create_claim(
-                statement_path,
-                issuer,
-                subject,
-                content_type,
-                payload,
-                private_key_pem_path,
-            )
-            scitt_emulator.client.submit_claim(
-                url,
-                statement_path,
-                transparent_statement_path,
-                entry_id_path,
-                scitt_emulator.client.HttpClient(token, cacert),
-            )
+        for tool_call in make_tool_calls_list(chunks):
+            with tempfile.TemporaryDirectory() as tempdir:
+                tempdir_path = pathlib.Path(tempdir)
+                statement_path = tempdir_path.joinpath("statement.cbor")
+                transparent_statement_path = tempdir_path.joinpath(
+                    "transparent_statement.cbor"
+                )
+                entry_id_path = tempdir_path.joinpath("entry_id.txt")
+                private_key_pem_path = tempdir_path.joinpath("private_key.pem")
+                private_key_pem_path.write_bytes(b"")
+                # TODO Take SCITT URL from config
+                url = "https://scitt.unstable.chadig.com"
+                # Use ephemeral key as issuer
+                issuer = None
+                # TODO subject should be the URN of the transparent statement
+                # which is the schema for the manifest. We'll shorthand that to
+                # an identifier until we setup that flow and discovery via
+                # json-ld and pydantic schema dump.
+                subject = "validate_tool_use_and_function_calls.proxy.llm"
+                # TODO Set content_type to json+json-schema-URN
+                # This way you can lookup a schema registered to a shorthand
+                # handle and each instance registers statements for payloads
+                # which are JSON schema to those handles as subjects.
+                # This way whenever we see a content type with a SCITT URN,
+                # we can go to our context local SCITT instance and check if we
+                # agree on the type system / schema we're using for payload
+                # which use the schema URN as their subject.
+                # application/json+<URI of transparent statement for schema>
+                content_type = "application/json"
+                # Payload is the manifest
+                # TODO Policy engine output MUST be the following and analysis
+                # - BOM
+                # - TCB
+                # - Threat Model
+                #   - Requires knowledge of which deployment (Open Architecture)
+                #     we are running under, with context overlays (user/actor,
+                #     TCBs to BOMs mappings, etc.)
+                payload = json.dumps(
+                    {
+                        # "context_id": tool_call["id"],
+                        "id": tool_call["id"],
+                        "function_call_name": tool_call["function"]["name"],
+                        # TODO If we include arguments we have to be sure to use
+                        # COSE encryption and not just signing.
+                        # "combined_arguments": tool_call["function"]["arguments"],
+                    },
+                    sort_keys=True,
+                )
+                # TODO Set from workload identity token with SCITT as audience
+                token = None
+                # TODO Set from config
+                ca_cert = None
+                http_client = scitt_emulator.client.HttpClient(token, cacert)
+                # Create a statement reflecting the proposed workload
+                scitt_emulator.create_statement.create_claim(
+                    statement_path,
+                    issuer,
+                    # Rate of epiphany moment / implementation starting to reach
+                    # theoritical in docs.
+                    # Async loop implements data flow execution:
+                    # - subject is the context, similar to policy_engine
+                    #   request.context stack (stack frames).
+                    # - SCITT policy engine acts as prioritizer
+                    # - Workflow orchestration acts as execution
+                    # Content type using URN of schema facilitates decentralized
+                    # dataflow programming.
+                    subject,
+                    content_type,
+                    payload,
+                    private_key_pem_path,
+                )
+                # Request generation of transparent statement (check adherance
+                # to SCITT instance registration policy).
+                scitt_emulator.client.submit_claim(
+                    url,
+                    statement_path,
+                    transparent_statement_path,
+                    entry_id_path,
+                    http_client,
+                )
+                # Get a workload identity token for the tool usage
+                # The subject is the URN of the statement we sent to the policy
+                # engine. We'll use it's transparent statement and the notary's
+                # key to counter-counter-sign, this is saying, we are the
+                # notary, our signature has passed policy engine evaluation, we
+                # want to exchange that fact for something, in this case a JWT
+                scitt_emulator.create_statement.create_claim(
+                    statement_path,
+                    issuer,
+                    subject,
+                    "application/cose",
+                    transparent_statement_path.read_bytes(),
+                    private_key_pem_path,
+                )
+                # Each time we copy request.context for a parallel job execution
+                # in the policy engine we are creating a new branch in our train
+                # of thought. Each new branch in a train of thought is a new
+                # subject. Each time we branch a train, we get finer and finer
+                # grained scopes of permissions as we go down the stack.
+                #
+                # Alice (llm proxy 2nd party tool use overlays) thinks up a
+                # request.yml. She signs a statement saying what her intent is
+                # with tool usage and why we should trust her and her proposed
+                # usage context. Alice (notary) signs off.
+                #
+                # Bob (SCITT) is on the policy team policy, he checks if Alice's
+                # request.yml proposal will adhear to policy within risk
+                # tolerence. Bob (transparency service) signs off.
+                #
+                # Alice want's to put her plan in action, she submits her plan
+                # to Eve who will help her aquire resources if Bob signed off.
+                # Eve (relying party) issues Alice a key to her allocated/auth'd
+                # resources (workload ID token). Eve logs this issuance in the
+                # transparency service. NOTE This looks like a place where
+                # KERI.one may come into play due to need for duplicity
+                # detection of workload ID token issuers (if multiple relying
+                # parties from phase 0 are invovled) NOTE.
+                """
+                token_issue_subject = ""
+                token_issue_url + f"/v1/token/issue/{audience}/{subject}"
+                token_issue_data = 
+                body_bytes = transparent_statement_path.read_bytes()
+                body_bytes = transparent_statement_path.read_bytes()
+                """
+                # If you make a 3rd COSESign1 and notarize the transparent
+                # statement you can take that and relying party gives a token
+                """
+                # with http_client.get(url) as response: reponse.json()
+                """
+                # If you notarized it you can have a token for it.
+                """
+                # with http_client.get(url) as response: reponse.json()
+                # token_revoke_url = url + f"/v1/token/revoke"
+                # token_revoke_data = {"token": token}
+                """
     elif (
         "function_call" in chunks[0]["choices"][0]["delta"]
         and chunks[0]["choices"][0]["delta"]["function_call"] is not None
     ):
-        function_call_name, combined_arguments = (
-            make_function_call_name_and_combined_arguments(chunks)
-        )
+        (
+            function_call_name,
+            combined_arguments,
+        ) = make_function_call_name_and_combined_arguments(chunks)
         raise NotImplementedError("Only tool use validation is implemented")
