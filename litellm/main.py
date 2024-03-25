@@ -7,7 +7,7 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import os, openai, sys, json, inspect, uuid, datetime, threading, tempfile
+import os, openai, sys, json, inspect, uuid, datetime, threading, tempfile, pathlib
 from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -4003,6 +4003,16 @@ def stream_chunk_builder(
 import snoop
 
 
+def create_transparent_statement(
+    statement_path,
+    receipt_path,
+    transparent_statement_path,
+    private_key_pem_path,
+):
+    # TODO
+    transparent_statement_path.write_bytes(receipt_path.read_bytes())
+
+
 @snoop
 def validate_tool_use_and_function_calls(
     self, chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
@@ -4038,12 +4048,12 @@ def validate_tool_use_and_function_calls(
             with tempfile.TemporaryDirectory() as tempdir:
                 tempdir_path = pathlib.Path(tempdir)
                 statement_path = tempdir_path.joinpath("statement.cbor")
+                receipt_path = tempdir_path.joinpath("receipt.cbor")
                 transparent_statement_path = tempdir_path.joinpath(
                     "transparent_statement.cbor"
                 )
                 entry_id_path = tempdir_path.joinpath("entry_id.txt")
                 private_key_pem_path = tempdir_path.joinpath("private_key.pem")
-                private_key_pem_path.write_bytes(b"")
                 # TODO Take SCITT URL from config
                 url = "https://scitt.unstable.chadig.com"
                 # Use ephemeral key as issuer
@@ -4081,12 +4091,12 @@ def validate_tool_use_and_function_calls(
                         # "combined_arguments": tool_call["function"]["arguments"],
                     },
                     sort_keys=True,
-                )
+                ).encode()
                 # TODO Set from workload identity token with SCITT as audience
                 token = None
                 # TODO Set from config
                 ca_cert = None
-                http_client = scitt_emulator.client.HttpClient(token, cacert)
+                http_client = scitt_emulator.client.HttpClient(token, ca_cert)
                 # Create a statement reflecting the proposed workload
                 scitt_emulator.create_statement.create_claim(
                     statement_path,
@@ -4110,24 +4120,23 @@ def validate_tool_use_and_function_calls(
                 scitt_emulator.client.submit_claim(
                     url,
                     statement_path,
-                    transparent_statement_path,
+                    receipt_path,
                     entry_id_path,
                     http_client,
                 )
-                # Get a workload identity token for the tool usage
-                # The subject is the URN of the statement we sent to the policy
-                # engine. We'll use it's transparent statement and the notary's
-                # key to counter-counter-sign, this is saying, we are the
-                # notary, our signature has passed policy engine evaluation, we
-                # want to exchange that fact for something, in this case a JWT
-                scitt_emulator.create_statement.create_claim(
+                # TODO Update entry IDs in SCITT emulator to URNs
+                # TODO scitt_emulator.create_transparent_statement.create_transparent_statement(
+                create_transparent_statement(
                     statement_path,
-                    issuer,
-                    subject,
-                    "application/cose",
-                    transparent_statement_path.read_bytes(),
+                    receipt_path,
+                    transparent_statement_path,
                     private_key_pem_path,
                 )
+                # Call it here and calculate the URN.
+                # TODO Relying party should register the statement with the
+                # transparency service as an audit trail, subject as what kind
+                # of token was issued.
+                transparent_statement_urn = entry_id_path.read_text()
                 # Each time we copy request.context for a parallel job execution
                 # in the policy engine we are creating a new branch in our train
                 # of thought. Each new branch in a train of thought is a new
@@ -4137,38 +4146,95 @@ def validate_tool_use_and_function_calls(
                 # Alice (llm proxy 2nd party tool use overlays) thinks up a
                 # request.yml. She signs a statement saying what her intent is
                 # with tool usage and why we should trust her and her proposed
-                # usage context. Alice (notary) signs off.
+                # usage context. Alice (notary and author of payload of
+                # statement) signs off.
                 #
                 # Bob (SCITT) is on the policy team policy, he checks if Alice's
                 # request.yml proposal will adhear to policy within risk
-                # tolerence. Bob (transparency service) signs off.
+                # tolerence. Bob (transparency service) signs off (receipt).
                 #
                 # Alice want's to put her plan in action, she submits her plan
-                # to Eve who will help her aquire resources if Bob signed off.
+                # to Eve (as a transparent statement) who will help her aquire
+                # resources if Bob signed off.
+                #
                 # Eve (relying party) issues Alice a key to her allocated/auth'd
                 # resources (workload ID token). Eve logs this issuance in the
                 # transparency service. NOTE This looks like a place where
                 # KERI.one may come into play due to need for duplicity
                 # detection of workload ID token issuers (if multiple relying
                 # parties from phase 0 are invovled) NOTE.
-                """
-                token_issue_subject = ""
-                token_issue_url + f"/v1/token/issue/{audience}/{subject}"
-                token_issue_data = 
-                body_bytes = transparent_statement_path.read_bytes()
-                body_bytes = transparent_statement_path.read_bytes()
-                """
-                # If you make a 3rd COSESign1 and notarize the transparent
-                # statement you can take that and relying party gives a token
-                """
-                # with http_client.get(url) as response: reponse.json()
-                """
-                # If you notarized it you can have a token for it.
-                """
-                # with http_client.get(url) as response: reponse.json()
+                #
+                # SCITT: 4.4.1. Validation
+                #
+                # Relying Parties MUST apply the verification process as
+                # described in Section 4.4 of RFC9052, when checking the
+                # signature of Signed Statements and Receipts.
+                #
+                # A Relying Party MUST trust the verification key or certificate
+                # and the associated identity of at least one issuer of a
+                # Receipt.
+                #
+                # A Relying Party MAY decide to verify only a single Receipt
+                # that is acceptable to them, and not check the signature on the
+                # Signed Statement or Receipts which rely on verifiable data
+                # structures which they do not understand.
+                #
+                # APIs exposing verification logic for Transparent Statements
+                # may provide more details than a single boolean result. For
+                # example, an API may indicate if the signature on the Receipt
+                # or Signed Statement is valid, if claims related to the
+                # validity period are valid, or if the inclusion proof in the
+                # Receipt is valid.
+                #
+                # Relying Parties MAY be configured to re-verify the Issuer's
+                # Signed Statement locally.
+                #
+                # In addition, Relying Parties MAY apply arbitrary validation
+                # policies after the Transparent Statement has been verified and
+                # validated. Such policies may use as input all information in
+                # the Envelope, the Receipt, and the Statement payload, as well
+                # as any local state.
+
+                # TODO Will want to add the tool use workload ID token to the
+                # response object.
+                #
+                # Subject is URN of transparent statement as that's what's
+                # executing as this workload identity. subject represents what
+                # workload was okayed to run based on BOM, TCB, Threat Model +
+                # Analysis (+ it's BOM, TCB, Threat Model + Analysis)
+                # Turtles all the way down.
+                token_issue_subject = transparent_statement_urn
+                # TODO The audience we use here is the phase 0 relying party
+                # endpoint, which in phase 0 is part of the SCITT instance.
+                # The audience is the relying party because this token will be
+                # used to issue further tokens against the same subject during
+                # the execution of the workload (use of the tool). These tokens
+                # will be issued with whatever other audience is needed.
+                token_issue_audience = url
+                token_issue_url + f"{url}/v1/token/issue/{token_issue_audience}/{token_issue_subject}"
+                token_issue_content = transparent_statement_path.read_bytes()
+                # response = http_client.post(
+                #     token_issue_url,
+                #     content=token_issue_content,
+                #     headers={"Content-Type": "application/cbor"},
+                # )
+                # scitt_emulator.client.raise_for_status(response)
+                # token = response.json()["token"]
+                # TODO Enforce namespacing on tool/function names.
+                # TODO Call overlayed 2nd party tools and pass them their
+                # tokens. Somehow analyize langchain prompts similar to how we
+                # will append tools and get their arguments / inspect.signature
+                # type of thing. Ideally pass those by inference of which
+                # argument (by name or data type) their JWT.
+                # TODO Revoke the token when we intercept a return value
                 # token_revoke_url = url + f"/v1/token/revoke"
-                # token_revoke_data = {"token": token}
-                """
+                # token_revoke_content = json.dumps({"token": token})
+                # response = http_client.post(
+                #     token_revoke_url,
+                #     content=token_revoke_content ,
+                #     headers={"Content-Type": "application/cbor"},
+                # )
+                # scitt_emulator.client.raise_for_status(response)
     elif (
         "function_call" in chunks[0]["choices"][0]["delta"]
         and chunks[0]["choices"][0]["delta"]["function_call"] is not None
