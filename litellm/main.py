@@ -7,7 +7,7 @@
 #
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
-import os, openai, sys, json, inspect, uuid, datetime, threading
+import os, openai, sys, json, inspect, uuid, datetime, threading, tempfile
 from typing import Any, Literal, Union, BinaryIO
 from functools import partial
 import dotenv, traceback, random, asyncio, time, contextvars
@@ -3995,3 +3995,74 @@ def stream_chunk_builder(
         start_time=start_time,
         end_time=end_time,
     )
+
+import snoop
+
+@snoop
+def validate_tool_use_and_function_calls(
+    self,
+    chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
+):
+    # TODO Config setting to enable or disable tool usage / function call
+    # validation. Config for this is the SCITT service endpoint and notary key
+    # to use. The notary key should be from the relying party which booted
+    # litellm proxy and has the ClearForTakeOff for the BOM when it booted.
+    # So litellm proxy's orchestration sends off to the relying party to get a
+    # workload ID token, which it passes to litellm proxy.
+    # TODO We also want to enable adding a custom set of tools, or discovery via
+    # OpenAPI spec, and adding those to LLMs on all proxied calls. These
+    # services are Phase 4.
+    import snoop
+    snoop.pp(locals())
+
+    # We need to submit to SCITT a statement with a payload which describes the
+    # call, the manifest for it. We should use the subject to say what context
+    # requires the call. This way all a thread's responses would be a feed.
+    # Policy engine runs based on subject, so it should trigger workflows
+    # appropriately.
+
+    if (
+        "tool_calls" in chunks[0]["choices"][0]["delta"]
+        and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None
+    ):
+        tool_call = make_tool_calls_list(chunks)
+        # [{'id': 'call_BwSpvV9FFUZ7whChqqYS3o4R', 'function': {'arguments': '{"ticker":"INTC"}', 'name': 'historical_stock_prices'}, 'type': 'function'}]
+        # [{'id': 'call_K760oMiZiz6dsxTfUAsdnZSp', 'function': {'arguments': '{"historical_stock_prices":"[[\\"2024-03-22\\", 42...[\\"2024-03-23\\", 52.0], [\\"2024-03-24\\", 62.0]]"}', 'name': 'forecast'}, 'type': 'function'}]
+        # [{'id': 'call_tE6e6A93Vkf77uiJo1bKjk1E', 'function': {'arguments': '{"ticker":"INTC"}', 'name': 'historical_stock_prices'}, 'type': 'function'}]
+        # [{'id': 'call_k98HPuu2KRSyl2YTZS7bceef', 'function': {'arguments': '{"historical_stock_prices":"[[\\"2024-03-22\\", 42...[\\"2024-03-23\\", 52.0], [\\"2024-03-24\\", 62.0]]"}', 'name': 'forecast'}, 'type': 'function'}]
+        with tempfile.TemporaryDirectory() as tempdir:
+            tempdir_path = pathlib.Path(tempdir)
+            statement_path = tempdir_path.joinpath("statement.cbor")
+            transparent_statement_path = tempdir_path.joinpath("transparent_statement.cbor")
+            entry_id_path = tempdir_path.joinpath("entry_id.txt")
+            url = 
+            issuer = 
+            subject = 
+            content_type = 
+            payload = 
+            private_key_pem_path = 
+            token = 
+            ca_cert = 
+            scitt_emulator.create_statement.create_claim(
+                statement_path,
+                issuer,
+                subject,
+                content_type,
+                payload,
+                private_key_pem_path,
+            )
+            scitt_emulator.client.submit_claim(
+                url,
+                statement_path,
+                transparent_statement_path,
+                entry_id_path,
+                scitt_emulator.client.HttpClient(token, cacert),
+            )
+    elif (
+        "function_call" in chunks[0]["choices"][0]["delta"]
+        and chunks[0]["choices"][0]["delta"]["function_call"] is not None
+    ):
+        function_call_name, combined_arguments = (
+            make_function_call_name_and_combined_arguments(chunks)
+        )
+        raise NotImplementedError("Only tool use validation is implemented")

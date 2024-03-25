@@ -1766,6 +1766,20 @@ class Logging:
                 self.streaming_chunks.append(result)
                 # verbose_logger.debug(f"final set of received chunks: {self.streaming_chunks}")
                 try:
+                    litellm.validate_tool_use_and_function_calls(
+                        self,
+                        self.streaming_chunks,
+                        messages=self.model_call_details.get("messages", None),
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                except Exception as e:
+                    verbose_logger.debug(
+                        f"Error occurred validating stream chunk: {traceback.format_exc()}"
+                    )
+                    complete_streaming_response = None
+
+                try:
                     complete_streaming_response = litellm.stream_chunk_builder(
                         self.streaming_chunks,
                         messages=self.model_call_details.get("messages", None),
