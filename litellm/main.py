@@ -3793,6 +3793,85 @@ def stream_chunk_builder_text_completion(chunks: list, messages: Optional[List] 
     return response
 
 
+def make_tool_calls_list(chunks):
+    argument_list = []
+    delta = chunks[0]["choices"][0]["delta"]
+    id = None
+    name = None
+    type = None
+    tool_calls_list = []
+    prev_index = 0
+    prev_id = None
+    curr_id = None
+    curr_index = 0
+    for chunk in chunks:
+        choices = chunk["choices"]
+        for choice in choices:
+            delta = choice.get("delta", {})
+            tool_calls = delta.get("tool_calls", "")
+            # Check if a tool call is present
+            if tool_calls and tool_calls[0].function is not None:
+                if tool_calls[0].id:
+                    id = tool_calls[0].id
+                    curr_id = id
+                    if prev_id is None:
+                        prev_id = curr_id
+                if tool_calls[0].index:
+                    curr_index = tool_calls[0].index
+                if tool_calls[0].function.arguments:
+                    # Now, tool_calls is expected to be a dictionary
+                    arguments = tool_calls[0].function.arguments
+                    argument_list.append(arguments)
+                if tool_calls[0].function.name:
+                    name = tool_calls[0].function.name
+                if tool_calls[0].type:
+                    type = tool_calls[0].type
+        if curr_index != prev_index:  # new tool call
+            combined_arguments = "".join(argument_list)
+            tool_calls_list.append(
+                {
+                    "id": prev_id,
+                    "index": prev_index,
+                    "function": {"arguments": combined_arguments, "name": name},
+                    "type": type,
+                }
+            )
+            argument_list = []  # reset
+            prev_index = curr_index
+            prev_id = curr_id
+
+    combined_arguments = "".join(argument_list)
+    tool_calls_list.append(
+        {
+            "id": id,
+            "function": {"arguments": combined_arguments, "name": name},
+            "type": type,
+        }
+    )
+    return tool_calls_list
+
+
+def make_function_call_name_and_combined_arguments(chunks):
+    argument_list = []
+    delta = chunks[0]["choices"][0]["delta"]
+    function_call = delta.get("function_call", "")
+    function_call_name = function_call.name
+
+    for chunk in chunks:
+        choices = chunk["choices"]
+        for choice in choices:
+            delta = choice.get("delta", {})
+            function_call = delta.get("function_call", "")
+
+            # Check if a function call is present
+            if function_call:
+                # Now, function_call is expected to be a dictionary
+                arguments = function_call.arguments
+                argument_list.append(arguments)
+
+    return function_call_name, "".join(argument_list)
+
+
 def stream_chunk_builder(
     chunks: list, messages: Optional[list] = None, start_time=None, end_time=None
 ):
@@ -3853,90 +3932,20 @@ def stream_chunk_builder(
         "tool_calls" in chunks[0]["choices"][0]["delta"]
         and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None
     ):
-        argument_list = []
-        delta = chunks[0]["choices"][0]["delta"]
-        message = response["choices"][0]["message"]
-        message["tool_calls"] = []
-        id = None
-        name = None
-        type = None
-        tool_calls_list = []
-        prev_index = 0
-        prev_id = None
-        curr_id = None
-        curr_index = 0
-        for chunk in chunks:
-            choices = chunk["choices"]
-            for choice in choices:
-                delta = choice.get("delta", {})
-                tool_calls = delta.get("tool_calls", "")
-                # Check if a tool call is present
-                if tool_calls and tool_calls[0].function is not None:
-                    if tool_calls[0].id:
-                        id = tool_calls[0].id
-                        curr_id = id
-                        if prev_id is None:
-                            prev_id = curr_id
-                    if tool_calls[0].index:
-                        curr_index = tool_calls[0].index
-                    if tool_calls[0].function.arguments:
-                        # Now, tool_calls is expected to be a dictionary
-                        arguments = tool_calls[0].function.arguments
-                        argument_list.append(arguments)
-                    if tool_calls[0].function.name:
-                        name = tool_calls[0].function.name
-                    if tool_calls[0].type:
-                        type = tool_calls[0].type
-            if curr_index != prev_index:  # new tool call
-                combined_arguments = "".join(argument_list)
-                tool_calls_list.append(
-                    {
-                        "id": prev_id,
-                        "index": prev_index,
-                        "function": {"arguments": combined_arguments, "name": name},
-                        "type": type,
-                    }
-                )
-                argument_list = []  # reset
-                prev_index = curr_index
-                prev_id = curr_id
-
-        combined_arguments = "".join(argument_list)
-        tool_calls_list.append(
-            {
-                "id": id,
-                "function": {"arguments": combined_arguments, "name": name},
-                "type": type,
-            }
-        )
         response["choices"][0]["message"]["content"] = None
-        response["choices"][0]["message"]["tool_calls"] = tool_calls_list
+        response["choices"][0]["message"]["tool_calls"] = make_tool_calls_list(
+            chunks,
+        )
     elif (
         "function_call" in chunks[0]["choices"][0]["delta"]
         and chunks[0]["choices"][0]["delta"]["function_call"] is not None
     ):
-        argument_list = []
-        delta = chunks[0]["choices"][0]["delta"]
-        function_call = delta.get("function_call", "")
-        function_call_name = function_call.name
-
+        function_call_name, combined_arguments = (
+            make_function_call_name_and_combined_arguments(chunks)
+        )
         message = response["choices"][0]["message"]
         message["function_call"] = {}
         message["function_call"]["name"] = function_call_name
-
-        for chunk in chunks:
-            choices = chunk["choices"]
-            for choice in choices:
-                delta = choice.get("delta", {})
-                function_call = delta.get("function_call", "")
-
-                # Check if a function call is present
-                if function_call:
-                    # Now, function_call is expected to be a dictionary
-                    arguments = function_call.arguments
-                    argument_list.append(arguments)
-
-        combined_arguments = "".join(argument_list)
         response["choices"][0]["message"]["content"] = None
         response["choices"][0]["message"]["function_call"][
             "arguments"
