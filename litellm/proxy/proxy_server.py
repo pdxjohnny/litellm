@@ -1658,8 +1658,6 @@ def get_callback_params_kwarg(callback_cls, callback_params_cls):
     raise Exception(f"Could not find an Optional[{callback_params_cls}] keyword argument in {callback_cls}.__init__(**kwargs)")
 
 
-import snoop
-@snoop
 def callback_instance(
     litellm_settings,
     value,
@@ -2659,13 +2657,9 @@ async def async_data_generator(response, user_api_key_dict):
     verbose_proxy_logger.debug("inside generator")
     try:
         start_time = time.time()
-        async for chunk in response:
-            ### CALL HOOKS ### - modify outgoing data
-            with snoop():
-                chunk = await proxy_logging_obj.post_call_streaming_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    chunk=chunk,
-                )
+        async for chunk in proxy_logging_obj.post_call_streaming_hook(
+            response, user_api_key_dict,
+        ):
             chunk = chunk.model_dump_json(exclude_none=True)
             try:
                 yield f"data: {chunk}\n\n"
@@ -3283,10 +3277,9 @@ async def chat_completion(
         fastapi_response.headers["x-litellm-model-id"] = model_id
 
         ### CALL HOOKS ### - modify outgoing data
-        with snoop():
-            response = await proxy_logging_obj.post_call_success_hook(
-                user_api_key_dict=user_api_key_dict, response=response
-            )
+        response = await proxy_logging_obj.post_call_success_hook(
+            user_api_key_dict=user_api_key_dict, response=response
+        )
 
         return response
     except Exception as e:

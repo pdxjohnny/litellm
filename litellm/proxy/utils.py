@@ -1,4 +1,4 @@
-from typing import Optional, List, Any, Literal, Union
+from typing import Optional, List, Any, Literal, Union, AsyncIterator
 import os, subprocess, hashlib, importlib, asyncio, copy, json, aiohttp, httpx
 import litellm, backoff
 from litellm.proxy._types import (
@@ -447,10 +447,9 @@ class ProxyLogging:
         1. /chat/completions
         """
         new_response = copy.deepcopy(response)
-        snoop.pp(litellm.callbacks)
         for callback in litellm.callbacks:
             try:
-                # This doesn't work with spec style import
+                # isinstance doesn't work with module spec imports
                 if hasattr(callback, "async_post_call_success_hook"):
                     await callback.async_post_call_success_hook(
                         user_api_key_dict=user_api_key_dict, response=new_response
@@ -461,7 +460,7 @@ class ProxyLogging:
 
     async def post_call_streaming_hook(
         self,
-        response: str,
+        response: AsyncIterator[Any],
         user_api_key_dict: UserAPIKeyAuth,
     ):
         """
@@ -469,17 +468,16 @@ class ProxyLogging:
         - Run through moderation check
         - Reject request if it fails moderation check
         """
-        new_response = copy.deepcopy(response)
-        snoop.pp(litellm.callbacks)
-        for callback in litellm.callbacks:
-            try:
-                if hasattr(callback, "async_post_call_streaming_hook"):
-                    await callback.async_post_call_streaming_hook(
-                        user_api_key_dict=user_api_key_dict, response=new_response
-                    )
-            except Exception as e:
-                raise e
-        return new_response
+        async for chunk in response:
+            for callback in litellm.callbacks:
+                try:
+                    if hasattr(callback, "async_post_call_streaming_hook"):
+                        await callback.async_post_call_streaming_hook(
+                            user_api_key_dict=user_api_key_dict, chunk=chunk,
+                        )
+                except Exception as e:
+                    raise e
+            yield chunk
 
 
 ### DB CONNECTOR ###

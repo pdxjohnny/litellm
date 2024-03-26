@@ -6,7 +6,7 @@ import requests
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.caching import DualCache
 
-from typing import Literal, Union
+from typing import Literal, Union, AsyncIterator, Any
 
 dotenv.load_dotenv()  # Loading env variables using dotenv
 import traceback
@@ -82,7 +82,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     async def async_post_call_streaming_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: str,
+        chunk: Any,
     ):
         pass
 
