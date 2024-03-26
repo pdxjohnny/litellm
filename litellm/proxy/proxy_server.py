@@ -2,12 +2,15 @@ import sys, os, platform, time, copy, re, asyncio, inspect
 import threading, ast
 import shutil, random, traceback, requests
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, get_args
 import secrets, subprocess
 import hashlib, uuid
 import warnings
 import importlib
 import warnings
+import inspect
+import pathlib
+import itertools
 
 
 def showwarning(message, category, filename, lineno, file=None, line=None):
@@ -1631,6 +1634,65 @@ async def _run_background_health_check():
         await asyncio.sleep(health_check_interval)
 
 
+def make_entrypoint_style_string(obj):
+    module = inspect.getmodule(obj)
+    if not module:
+        return repr(obj).split("'")[-2]
+    module_name = module.__name__
+    file_path = pathlib.Path(__file__)
+    module_path = [file_path.stem]
+    if module_name == "__main__":
+        module_in_dir_path = file_path.parent
+        while module_in_dir_path.joinpath("__init__.py").exists():
+            module_path.append(module_in_dir_path.stem)
+            module_in_dir_path = module_in_dir_path.parent
+        module_name = ".".join(module_path[::-1])
+    return f"{module_name}:{obj.__name__}"
+
+
+def get_callback_params_kwarg(callback_cls, callback_params_cls):
+    for name, parameter in inspect.signature(callback_cls).parameters.items():
+        for arg in get_args(parameter.annotation):
+            if make_entrypoint_style_string(arg) == make_entrypoint_style_string(callback_params_cls):
+                return name
+    raise Exception(f"Could not find an Optional[{callback_params_cls}] keyword argument in {callback_cls}.__init__(**kwargs)")
+
+
+def callback_instance(
+    litellm_settings,
+    value,
+    config_file_path,
+):
+    if "callback_params" not in litellm_settings:
+        return get_instance_fn(
+            value=value,
+            config_file_path=config_file_path,
+        )
+    elif (
+        "callback_params" in litellm_settings
+        and "callback_params_cls" in litellm_settings
+    ):
+        callback_cls = get_instance_fn(
+            value=value,
+            config_file_path=config_file_path,
+        )
+        callback_params_cls = get_instance_fn(
+            value=litellm_settings["callback_params_cls"],
+            config_file_path=config_file_path,
+        )
+        callback_params = callback_params_cls(
+            **litellm_settings["callback_params"],
+        )
+        callback_params_kwarg = get_callback_params_kwarg(
+            callback_cls, callback_params_cls,
+        )
+        callback_kwargs = {
+            callback_params_kwarg: callback_params,
+        }
+        return callback_cls(**callback_kwargs)
+    raise Exception("Both callback_params and callback_params_cls must be set or neither")
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -1960,15 +2022,17 @@ class ProxyConfig:
                                 imported_list.append(batch_redis_obj)
                             else:
                                 imported_list.append(
-                                    get_instance_fn(
-                                        value=callback,
+                                    callback_instance(
+                                        litellm_settings=litellm_settings,
+                                        value=value,
                                         config_file_path=config_file_path,
                                     )
                                 )
                         litellm.callbacks = imported_list  # type: ignore
                     else:
                         litellm.callbacks = [
-                            get_instance_fn(
+                            callback_instance(
+                                litellm_settings=litellm_settings,
                                 value=value,
                                 config_file_path=config_file_path,
                             )
