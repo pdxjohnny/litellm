@@ -1,0 +1,11 @@
+model_list:
+  - model_name: gpt-3.5-turbo-1106
+    litellm_params:
+      model: gpt-3.5-turbo-1106
+
+litellm_settings:
+  callbacks: scitt_validated_tool_use.LiteLLMSCITTValidatedToolUse
+  callback_params_cls: scitt_validated_tool_use.LiteLLMSCITTValidatedToolUseParams
+  callback_params:
+    scrapi_instance_urls:
+    - 'https://scitt.unstable.chadig.com'
