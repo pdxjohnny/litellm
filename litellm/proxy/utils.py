@@ -447,9 +447,11 @@ class ProxyLogging:
         1. /chat/completions
         """
         new_response = copy.deepcopy(response)
+        snoop.pp(litellm.callbacks)
         for callback in litellm.callbacks:
             try:
-                if isinstance(callback, CustomLogger):
+                # This doesn't work with spec style import
+                if hasattr(callback, "async_post_call_success_hook"):
                     await callback.async_post_call_success_hook(
                         user_api_key_dict=user_api_key_dict, response=new_response
                     )
@@ -468,9 +470,10 @@ class ProxyLogging:
         - Reject request if it fails moderation check
         """
         new_response = copy.deepcopy(response)
+        snoop.pp(litellm.callbacks)
         for callback in litellm.callbacks:
             try:
-                if isinstance(callback, CustomLogger):
+                if hasattr(callback, "async_post_call_streaming_hook"):
                     await callback.async_post_call_streaming_hook(
                         user_api_key_dict=user_api_key_dict, response=new_response
                     )
