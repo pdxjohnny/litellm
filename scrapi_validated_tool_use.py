@@ -1,10 +1,10 @@
 # +------------------------------------+
 #
-#        SCITT Validated Tool Use
+#        SCRAPI Validated Tool Use
 #
 # +------------------------------------+
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
-## Reject a call if it contains tool usages that have not been admitted to SCITT
+## Reject a call if it contains tool usages that have not been admitted to SCRAPI
 import json
 import asyncio
 import base64
@@ -14,7 +14,7 @@ import pathlib
 import traceback
 from typing import Optional, Literal, List, Any, AsyncIterator
 
-from pydantic import Field
+from pydantic import Field, root_validator
 from fastapi import HTTPException
 import litellm
 from litellm.caching import DualCache
@@ -34,7 +34,7 @@ import scitt_emulator.did_helpers
 import snoop
 
 
-class SCITTSCRAPIInstance(LiteLLMBase):
+class SCRAPISCRAPIInstance(LiteLLMBase, extra='forbid'):
     url: str
     token: Optional[str] = None
     ca_cert: Optional[Any] = None
@@ -47,19 +47,19 @@ class SCITTSCRAPIInstance(LiteLLMBase):
     subject: Optional[str] = "validate_tool_use_and_function_calls.proxy.llm"
 
 
-class LiteLLMSCITTValidatedToolUseParams(LiteLLMBase):
-    scrapi_instances: list[SCITTSCRAPIInstance] = Field(
+class LiteLLMSCRAPIValidatedToolUseParams(LiteLLMBase, extra='forbid'):
+    scrapi_instances: list[SCRAPISCRAPIInstance] = Field(
         default_factory=lambda: [],
     )
 
 
 async def validate_tool_use_and_function_calls(
-    params: LiteLLMSCITTValidatedToolUseParams,
+    params: LiteLLMSCRAPIValidatedToolUseParams,
     user_api_key_dict: UserAPIKeyAuth,
     chunks: list,
 ):
     # TODO Config setting to enable or disable tool usage / function call
-    # validation. Config for this is the SCITT service endpoint and notary key
+    # validation. Config for this is the SCRAPI service endpoint and notary key
     # to use. The notary key should be from the relying party which booted
     # litellm proxy and has the ClearForTakeOff for the BOM when it booted.
     # So litellm proxy's orchestration sends off to the relying party to get a
@@ -68,7 +68,7 @@ async def validate_tool_use_and_function_calls(
     # OpenAPI spec, and adding those to LLMs on all proxied calls. These
     # services are Phase 4.
 
-    # We need to submit to SCITT a statement with a payload which describes the
+    # We need to submit to SCRAPI a statement with a payload which describes the
     # call, the manifest for it. We should use the subject to say what context
     # requires the call. This way all a thread's responses would be a feed.
     # Policy engine runs based on subject, so it should trigger workflows
@@ -97,7 +97,7 @@ async def validate_tool_use_and_function_calls(
                     private_key_pem_path = tempdir_path.joinpath("private_key.pem")
                     if scrapi.private_key_pem:
                         private_key_pem_path.write_text(scrapi.private_key_pem)
-                    # Take SCITT URL from config
+                    # Take SCRAPI URL from config
                     url = scrapi.url
                     # notary_issuer as None to use ephemeral key as issuer
                     issuer = scrapi.issuer
@@ -106,8 +106,8 @@ async def validate_tool_use_and_function_calls(
                     # This way you can lookup a schema registered to a shorthand
                     # handle and each instance registers statements for payloads
                     # which are JSON schema to those handles as subjects.
-                    # This way whenever we see a content type with a SCITT URN,
-                    # we can go to our context local SCITT instance and check if we
+                    # This way whenever we see a content type with a SCRAPI URN,
+                    # we can go to our context local SCRAPI instance and check if we
                     # agree on the type system / schema we're using for payload
                     # which use the schema URN as their subject.
                     # application/json+<URI of transparent statement for schema>
@@ -150,7 +150,7 @@ async def validate_tool_use_and_function_calls(
                         # Async loop implements data flow execution:
                         # - subject is the context, similar to policy_engine
                         #   request.context stack (stack frames).
-                        # - SCITT policy engine acts as prioritizer
+                        # - SCRAPI policy engine acts as prioritizer
                         # - Workflow orchestration acts as execution
                         # Content type using URN of schema facilitates decentralized
                         # dataflow programming.
@@ -166,7 +166,7 @@ async def validate_tool_use_and_function_calls(
                     ca_cert = scrapi.ca_cert
                     http_client = scitt_emulator.client.HttpClient(token, ca_cert)
                     # Request generation of transparent statement (check adherance
-                    # to SCITT instance registration policy).
+                    # to SCRAPI instance registration policy).
                     scitt_emulator.client.submit_claim(
                         url,
                         statement_path,
@@ -174,7 +174,7 @@ async def validate_tool_use_and_function_calls(
                         entry_id_path,
                         http_client,
                     )
-                    # TODO Update entry IDs in SCITT emulator to URNs
+                    # TODO Update entry IDs in SCRAPI emulator to URNs
                     # Create a transparent statement including the receipt
                     scitt_emulator.create_statement.create_claim(
                         transparent_statement_path,
@@ -198,7 +198,7 @@ async def validate_tool_use_and_function_calls(
                             ).digest()
                         )
                     ).decode()
-                    transparent_statement_urn = f"urn:ietf:params:scitt:transparent-statement:sha-256:base64url:{transparent_statement_base64url_encoded_bytes_digest}"
+                    transparent_statement_urn = f"urn:ietf:params:scrapi:transparent-statement:sha-256:base64url:{transparent_statement_base64url_encoded_bytes_digest}"
                     # Each time we copy request.context for a parallel job execution
                     # in the policy engine we are creating a new branch in our train
                     # of thought. Each new branch in a train of thought is a new
@@ -211,7 +211,7 @@ async def validate_tool_use_and_function_calls(
                     # usage context. Alice (notary and author of payload of
                     # statement) signs off.
                     #
-                    # Bob (SCITT) is on the policy team policy, he checks if Alice's
+                    # Bob (SCRAPI) is on the policy team policy, he checks if Alice's
                     # request.yml proposal will adhear to policy within risk
                     # tolerence. Bob (transparency service) signs off (receipt).
                     #
@@ -226,7 +226,7 @@ async def validate_tool_use_and_function_calls(
                     # detection of workload ID token issuers (if multiple relying
                     # parties from phase 0 are invovled) NOTE.
                     #
-                    # SCITT: 4.4.1. Validation
+                    # SCRAPI: 4.4.1. Validation
                     #
                     # Relying Parties MUST apply the verification process as
                     # described in Section 4.4 of RFC9052, when checking the
@@ -267,7 +267,7 @@ async def validate_tool_use_and_function_calls(
                     # Turtles all the way down.
                     token_issue_subject = transparent_statement_urn
                     # TODO The audience we use here is the phase 0 relying party
-                    # endpoint, which in phase 0 is part of the SCITT instance.
+                    # endpoint, which in phase 0 is part of the SCRAPI instance.
                     # The audience is the relying party because this token will be
                     # used to issue further tokens against the same subject during
                     # the execution of the workload (use of the tool). These tokens
@@ -308,15 +308,15 @@ async def validate_tool_use_and_function_calls(
         raise NotImplementedError("Only tool use validation is implemented")
 
 
-class LiteLLMSCITTValidatedToolUse(CustomLogger):
+class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
     def __init__(
         self,
-        scitt_validated_tool_use_params: Optional[LiteLLMSCITTValidatedToolUseParams] = None,
+        scrapi_validated_tool_use_params: Optional[LiteLLMSCRAPIValidatedToolUseParams] = None,
     ):
         # TODO Periodiclly clean up streaming_chunks list on some cron timer
         # in case of mid stream dropped exchanges.
         self.streaming_chunks = {}
-        self.scitt_validated_tool_use_params = scitt_validated_tool_use_params
+        self.scrapi_validated_tool_use_params = scrapi_validated_tool_use_params
         self.llm_router: Optional[litellm.Router] = None
 
     def print_verbose(self, print_statement, level: Literal["INFO", "DEBUG"] = "DEBUG"):
@@ -331,30 +331,20 @@ class LiteLLMSCITTValidatedToolUse(CustomLogger):
     def update_environment(self, router: Optional[litellm.Router] = None):
         self.llm_router = router
 
-        if self.scitt_validated_tool_use_params is not None:
-            # TODO Validate parameters
-            self.print_verbose(
-                f"params: {self.scitt_validated_tool_use_params}"
-            )
+        if self.scrapi_validated_tool_use_params is None:
+            return
 
-    async def async_pre_call_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
-        data: dict,
-        call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
-    ):
-        # TODO Add 2nd and 3rd party tools to prompts as needed
-        pass
+        params = self.scrapi_validated_tool_use_params
+        self.print_verbose(f"params: {params}")
 
     async def async_post_call_success_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response,
     ):
-        # TODO async_post_call_success_hook() not yet validated
+        raise NotImplementedError("TODO async_post_call_success_hook() not yet validated")
         await validate_tool_use_and_function_calls(
-            self.scitt_validated_tool_use_params,
+            self.scrapi_validated_tool_use_params,
             user_api_key_dict,
             response,
         )
@@ -364,7 +354,7 @@ class LiteLLMSCITTValidatedToolUse(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         chunk: Any,
     ):
-        if self.scitt_validated_tool_use_params is None:
+        if self.scrapi_validated_tool_use_params is None:
             return
 
         if not isinstance(chunk, litellm.ModelResponse) or not isinstance(
@@ -378,7 +368,7 @@ class LiteLLMSCITTValidatedToolUse(CustomLogger):
         if chunk.choices[0].finish_reason is not None:
             try:
                 await validate_tool_use_and_function_calls(
-                    self.scitt_validated_tool_use_params,
+                    self.scrapi_validated_tool_use_params,
                     user_api_key_dict,
                     self.streaming_chunks[chunk.id]
                 )

@@ -4,9 +4,14 @@ model_list:
       model: gpt-3.5-turbo-1106
 
 litellm_settings:
-  callbacks: scitt_validated_tool_use.LiteLLMSCITTValidatedToolUse
-  callback_params_cls: scitt_validated_tool_use.LiteLLMSCITTValidatedToolUseParams
-  callback_params:
-    scrapi_instances:
-    # - url: 'https://scitt.unstable.chadig.com'
-    - url: 'http://localhost:8000'
+  callbacks:
+    - - scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUse
+      - scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUseParams
+      - scrapi_instances:
+        # - url: 'https://scrapi.unstable.chadig.com'
+        - url: 'http://localhost:8000'
+    - - scrapi_tool_index.LiteLLMSCRAPIToolIndex
+      - scrapi_tool_index.LiteLLMSCRAPIToolIndexParams
+      - scrapi_instances:
+        # - url: 'https://scrapi.unstable.chadig.com'
+        - url: 'http://localhost:8000'
