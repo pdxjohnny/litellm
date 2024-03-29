@@ -298,15 +298,19 @@ async def validate_tool_use_and_function_calls(
                     )
                     scitt_emulator.client.raise_for_status(response)
                     token = response.json()["token"]
-                    # Tell other callbacks that want to know validation state
-                    # that this tool has been validated and give the token.
-                    chunks[0]["choices"][0]["delta"]["tool_calls"].scrapi_validated = token
-                    # TODO Enforce namespacing on tool/function names.
                     # TODO Call overlayed 2nd party tools and pass them their
                     # tokens. Somehow analyize langchain prompts similar to how we
                     # will append tools and get their arguments / inspect.signature
                     # type of thing. Ideally pass those by inference of which
                     # argument (by name or data type) their JWT.
+
+                    # Namespacing on tool/function names uses 
+                    snoop.pp(
+                    if tool_call["function"]["name"].startswith(
+                        chunks[0]["id"]
+                    )
+                        token
+
                     # TODO Revoke the token when tool call result is sent to LLM
                     token_revoke_url = url + f"/v1/token/revoke"
                     token_revoke_content = json.dumps({"token": token})
@@ -409,6 +413,7 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
             data,
             call_type,
         ):
+            # TODO Namespacing on tool/function names using response stream ID
             data["tools"].append(tool)
 
     async def async_post_call_success_hook(
