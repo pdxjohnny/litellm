@@ -39,7 +39,7 @@ import snoop
 
 
 @tool
-def historical_stock_prices(ticker: str) -> str:
+def historical_stock_prices(ticker: str, limit: int = 3) -> str:
     "Get the historical stock prices for a stock ticker"
     return json.dumps(
         [
@@ -186,9 +186,19 @@ async def run_proxy_tool_call(
     )
     scitt_emulator.client.raise_for_status(response)
     token = response.json()["token"]
-    # TODO Call out to OpenAPI endpoints
 
-    snoop.pp("TODO", tool_call)
+    # Remove proxy tool prefix from tool call name
+    tool_call["function"]["name"] = tool_call["function"]["name"][len(params.tool_prefix):]
+    snoop.pp(tool_call)
+
+    # TODO Add token to arguments if needed
+    tool_call_arguments = json.loads(tool_call["function"]["arguments"])
+
+    # TODO Call out to OpenAPI endpoint
+    import sys
+    local_function = globals()[tool_call["function"]["name"]]
+    tool_call_result = local_function(json.dumps(tool_call_arguments))
+    snoop.pp(tool_call_result)
 
     # TODO Revoke the token when tool call result is sent to LLM
     token_revoke_url = url + f"/v1/token/revoke"
@@ -336,7 +346,6 @@ async def validate_tool_use_and_function_calls(
                         ],
                     )
                     # Namespacing on tool/function names uses
-                    snoop.pp(tool_call, params.tool_prefix)
                     if tool_call["function"]["name"].startswith(
                         params.tool_prefix,
                     ):
@@ -441,7 +450,6 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         ):
             # TODO Namespacing on tool/function names using response stream ID
             data["tools"].append(tool)
-        snoop.pp(data)
 
     async def async_post_call_success_hook(
         self,
