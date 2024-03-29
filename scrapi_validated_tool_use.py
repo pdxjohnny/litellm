@@ -198,7 +198,6 @@ async def run_proxy_tool_call(
     import sys
     local_function = globals()[tool_call["function"]["name"]]
     tool_call_result = local_function(json.dumps(tool_call_arguments))
-    snoop.pp(tool_call_result)
 
     # TODO Revoke the token when tool call result is sent to LLM
     token_revoke_url = url + f"/v1/token/revoke"
@@ -209,6 +208,14 @@ async def run_proxy_tool_call(
         headers={"Content-Type": "application/json"},
     )
     scitt_emulator.client.raise_for_status(response)
+
+    # Return the tool call message object
+    tool_call_message = {
+        "content": tool_call_result,
+        "role": "tool",
+        "tool_call_id": tool_call["id"],
+    }
+    return tool_call_message
 
 
 async def validate_tool_use_and_function_calls(
@@ -439,9 +446,8 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         #               'parameters': {'properties': {'ticker': {'type': 'string'}},
         #                              'required': ['ticker'],
         #                              'type': 'object'}}}]
-        if not data["tools"]:
-            snoop.pp(data)
-            raise NotImplementedError
+        client_request_data_pre_aiter_tools = data
+        snoop.pp(client_request_data_pre_aiter_tools)
         async for tool in self.aiter_tools(
             user_api_key_dict,
             cache,
@@ -449,7 +455,8 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
             call_type,
         ):
             # TODO Namespacing on tool/function names using response stream ID
-            data["tools"].append(tool)
+            # data["tools"].append(tool)
+            pass
 
     async def async_post_call_success_hook(
         self,
@@ -481,7 +488,9 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         self.streaming_chunks[chunk.id].append(chunk)
 
         if chunk.choices[0].finish_reason is not None:
+            snoop.pp(self.streaming_chunks[chunk.id])
             try:
+                tool_call_tasks = {}
                 async with asyncio.TaskGroup() as tg:
                     async for transparent_statement_bytes, tool_call in validate_tool_use_and_function_calls(
                         self.scrapi_validated_tool_use_params,
@@ -494,9 +503,11 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
                             transparent_statement_bytes,
                             tool_call,
                         )
-                        await coro
                         # TODO Send results to LLM when task complete
-                        # task = tg.create_task(coro)
+                        tool_call_tasks[tool_call["id"]] = tg.create_task(coro)
+                    for coro in asyncio.as_completed(tool_call_tasks.values()):
+                        tool_call_result = await coro
+                        snoop.pp(tool_call_result)
             except Exception as e:
                 self.print_verbose(
                     f"Error occurred validating stream chunk: {traceback.format_exc()}"
