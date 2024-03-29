@@ -7,6 +7,9 @@ litellm_settings:
   callbacks: scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUse
   callback_params_cls: scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUseParams
   callback_params:
+    # For Phase 0 the relying party is routes added to SCRAPI
+    tool_use_relying_party:
+      url: 'http://localhost:8000'
     scrapi_instances:
     # - url: 'https://scitt.unstable.chadig.com'
     - url: 'http://localhost:8000'

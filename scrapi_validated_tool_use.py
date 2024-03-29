@@ -10,6 +10,7 @@ import asyncio
 import base64
 import hashlib
 import tempfile
+import warnings
 import pathlib
 import traceback
 from typing import Optional, Literal, List, Any, AsyncIterator
@@ -63,10 +64,141 @@ class SCRAPISCRAPIInstance(LiteLLMBase, extra='forbid'):
     tool_index_subject: Optional[str] = "tool.proxy.llm"
 
 
+class SCRAPIRelyingParty(LiteLLMBase, extra='forbid'):
+    url: str
+    token: Optional[str] = None
+    ca_cert: Optional[Any] = None
+
+
 class LiteLLMSCRAPIValidatedToolUseParams(LiteLLMBase, extra='forbid'):
+    tool_use_relying_party: SCRAPIRelyingParty
+    tool_prefix: Optional[str] = "_____"
     scrapi_instances: list[SCRAPISCRAPIInstance] = Field(
         default_factory=lambda: [],
     )
+
+
+async def run_proxy_tool_call(
+    params: LiteLLMSCRAPIValidatedToolUseParams,
+    user_api_key_dict: UserAPIKeyAuth,
+    transparent_statement_bytes: bytes,
+    tool_call: dict,
+):
+    # TODO Relying party should register the statement with the
+    # transparency service as an audit trail, subject as what kind
+    # of token was issued.
+    transparent_statement_base64url_encoded_bytes_digest = (
+        base64.urlsafe_b64encode(
+            hashlib.sha256(
+                transparent_statement_bytes,
+            ).digest()
+        )
+    ).decode()
+    transparent_statement_urn = f"urn:ietf:params:scrapi:transparent-statement:sha-256:base64url:{transparent_statement_base64url_encoded_bytes_digest}"
+    # TODO Calculate statement URN
+    warnings.warn("TODO Calculate statement URN", Warning, stacklevel=2)
+    statement_urn = transparent_statement_urn
+    # Each time we copy request.context for a parallel job execution
+    # in the policy engine we are creating a new branch in our train
+    # of thought. Each new branch in a train of thought is a new
+    # subject. Each time we branch a train, we get finer and finer
+    # grained scopes of permissions as we go down the stack.
+    #
+    # Alice (llm proxy 2nd party tool use overlays) thinks up a
+    # request.yml. She signs a statement saying what her intent is
+    # with tool usage and why we should trust her and her proposed
+    # usage context. Alice (notary and author of payload of
+    # statement) signs off.
+    #
+    # Bob (SCRAPI) is on the policy team policy, he checks if Alice's
+    # request.yml proposal will adhear to policy within risk
+    # tolerence. Bob (transparency service) signs off (receipt).
+    #
+    # Alice want's to put her plan in action, she submits her plan
+    # to Eve (as a transparent statement) who will help her aquire
+    # resources if Bob signed off.
+    #
+    # Eve (relying party) issues Alice a key to her allocated/auth'd
+    # resources (workload ID token). Eve logs this issuance in the
+    # transparency service. NOTE This looks like a place where
+    # KERI.one may come into play due to need for duplicity
+    # detection of workload ID token issuers (if multiple relying
+    # parties from phase 0 are invovled) NOTE.
+    #
+    # SCRAPI: 4.4.1. Validation
+    #
+    # Relying Parties MUST apply the verification process as
+    # described in Section 4.4 of RFC9052, when checking the
+    # signature of Signed Statements and Receipts.
+    #
+    # A Relying Party MUST trust the verification key or certificate
+    # and the associated identity of at least one issuer of a
+    # Receipt.
+    #
+    # A Relying Party MAY decide to verify only a single Receipt
+    # that is acceptable to them, and not check the signature on the
+    # Signed Statement or Receipts which rely on verifiable data
+    # structures which they do not understand.
+    #
+    # APIs exposing verification logic for Transparent Statements
+    # may provide more details than a single boolean result. For
+    # example, an API may indicate if the signature on the Receipt
+    # or Signed Statement is valid, if claims related to the
+    # validity period are valid, or if the inclusion proof in the
+    # Receipt is valid.
+    #
+    # Relying Parties MAY be configured to re-verify the Issuer's
+    # Signed Statement locally.
+    #
+    # In addition, Relying Parties MAY apply arbitrary validation
+    # policies after the Transparent Statement has been verified and
+    # validated. Such policies may use as input all information in
+    # the Envelope, the Receipt, and the Statement payload, as well
+    # as any local state.
+
+    # TODO Will want to add the tool use workload ID token to the
+    # response object.
+    #
+    # Subject is URN of statement as that's what's
+    # executing as this workload identity. subject represents what
+    # workload was okayed to run based on BOM, TCB, Threat Model +
+    # Analysis (+ it's BOM, TCB, Threat Model + Analysis)
+    # Turtles all the way down.
+    token_issue_subject = statement_urn
+    # TODO The audience we use here is the phase 0 relying party
+    # endpoint, which in phase 0 is part of the SCRAPI instance.
+    # The audience is the relying party because this token will be
+    # used to issue further tokens against the same subject during
+    # the execution of the workload (use of the tool). These tokens
+    # will be issued with whatever other audience is needed.
+    url = params.tool_use_relying_party.url
+    token_issue_audience = scitt_emulator.did_helpers.url_to_did_web(url)
+    token_issue_url = f"{url}/v1/token/issue/{token_issue_audience}/{token_issue_subject}"
+    token_issue_content = transparent_statement_bytes
+    http_client = scitt_emulator.client.HttpClient(
+        params.tool_use_relying_party.token,
+        params.tool_use_relying_party.ca_cert,
+    )
+    response = http_client.post(
+        token_issue_url,
+        content=token_issue_content,
+        headers={"Content-Type": "application/cbor"},
+    )
+    scitt_emulator.client.raise_for_status(response)
+    token = response.json()["token"]
+    # TODO Call out to OpenAPI endpoints
+
+    snoop.pp("TODO", tool_call)
+
+    # TODO Revoke the token when tool call result is sent to LLM
+    token_revoke_url = url + f"/v1/token/revoke"
+    token_revoke_content = json.dumps({"token": token})
+    response = http_client.post(
+        token_revoke_url,
+        content=token_revoke_content ,
+        headers={"Content-Type": "application/json"},
+    )
+    scitt_emulator.client.raise_for_status(response)
 
 
 async def validate_tool_use_and_function_calls(
@@ -203,123 +335,12 @@ async def validate_tool_use_and_function_calls(
                             receipt_path.read_bytes(),
                         ],
                     )
-                    # Call it here and calculate the URN.
-                    # TODO Relying party should register the statement with the
-                    # transparency service as an audit trail, subject as what kind
-                    # of token was issued.
-                    transparent_statement_base64url_encoded_bytes_digest = (
-                        base64.urlsafe_b64encode(
-                            hashlib.sha256(
-                                transparent_statement_path.read_bytes(),
-                            ).digest()
-                        )
-                    ).decode()
-                    transparent_statement_urn = f"urn:ietf:params:scrapi:transparent-statement:sha-256:base64url:{transparent_statement_base64url_encoded_bytes_digest}"
-                    # Each time we copy request.context for a parallel job execution
-                    # in the policy engine we are creating a new branch in our train
-                    # of thought. Each new branch in a train of thought is a new
-                    # subject. Each time we branch a train, we get finer and finer
-                    # grained scopes of permissions as we go down the stack.
-                    #
-                    # Alice (llm proxy 2nd party tool use overlays) thinks up a
-                    # request.yml. She signs a statement saying what her intent is
-                    # with tool usage and why we should trust her and her proposed
-                    # usage context. Alice (notary and author of payload of
-                    # statement) signs off.
-                    #
-                    # Bob (SCRAPI) is on the policy team policy, he checks if Alice's
-                    # request.yml proposal will adhear to policy within risk
-                    # tolerence. Bob (transparency service) signs off (receipt).
-                    #
-                    # Alice want's to put her plan in action, she submits her plan
-                    # to Eve (as a transparent statement) who will help her aquire
-                    # resources if Bob signed off.
-                    #
-                    # Eve (relying party) issues Alice a key to her allocated/auth'd
-                    # resources (workload ID token). Eve logs this issuance in the
-                    # transparency service. NOTE This looks like a place where
-                    # KERI.one may come into play due to need for duplicity
-                    # detection of workload ID token issuers (if multiple relying
-                    # parties from phase 0 are invovled) NOTE.
-                    #
-                    # SCRAPI: 4.4.1. Validation
-                    #
-                    # Relying Parties MUST apply the verification process as
-                    # described in Section 4.4 of RFC9052, when checking the
-                    # signature of Signed Statements and Receipts.
-                    #
-                    # A Relying Party MUST trust the verification key or certificate
-                    # and the associated identity of at least one issuer of a
-                    # Receipt.
-                    #
-                    # A Relying Party MAY decide to verify only a single Receipt
-                    # that is acceptable to them, and not check the signature on the
-                    # Signed Statement or Receipts which rely on verifiable data
-                    # structures which they do not understand.
-                    #
-                    # APIs exposing verification logic for Transparent Statements
-                    # may provide more details than a single boolean result. For
-                    # example, an API may indicate if the signature on the Receipt
-                    # or Signed Statement is valid, if claims related to the
-                    # validity period are valid, or if the inclusion proof in the
-                    # Receipt is valid.
-                    #
-                    # Relying Parties MAY be configured to re-verify the Issuer's
-                    # Signed Statement locally.
-                    #
-                    # In addition, Relying Parties MAY apply arbitrary validation
-                    # policies after the Transparent Statement has been verified and
-                    # validated. Such policies may use as input all information in
-                    # the Envelope, the Receipt, and the Statement payload, as well
-                    # as any local state.
-
-                    # TODO Will want to add the tool use workload ID token to the
-                    # response object.
-                    #
-                    # Subject is URN of transparent statement as that's what's
-                    # executing as this workload identity. subject represents what
-                    # workload was okayed to run based on BOM, TCB, Threat Model +
-                    # Analysis (+ it's BOM, TCB, Threat Model + Analysis)
-                    # Turtles all the way down.
-                    token_issue_subject = transparent_statement_urn
-                    # TODO The audience we use here is the phase 0 relying party
-                    # endpoint, which in phase 0 is part of the SCRAPI instance.
-                    # The audience is the relying party because this token will be
-                    # used to issue further tokens against the same subject during
-                    # the execution of the workload (use of the tool). These tokens
-                    # will be issued with whatever other audience is needed.
-                    token_issue_audience = scitt_emulator.did_helpers.url_to_did_web(url)
-                    token_issue_url = f"{url}/v1/token/issue/{token_issue_audience}/{token_issue_subject}"
-                    token_issue_content = transparent_statement_path.read_bytes()
-                    response = http_client.post(
-                        token_issue_url,
-                        content=token_issue_content,
-                        headers={"Content-Type": "application/cbor"},
-                    )
-                    scitt_emulator.client.raise_for_status(response)
-                    token = response.json()["token"]
-                    # TODO Call overlayed 2nd party tools and pass them their
-                    # tokens. Somehow analyize langchain prompts similar to how we
-                    # will append tools and get their arguments / inspect.signature
-                    # type of thing. Ideally pass those by inference of which
-                    # argument (by name or data type) their JWT.
-
-                    # Namespacing on tool/function names uses 
-                    snoop.pp(
+                    # Namespacing on tool/function names uses
+                    snoop.pp(tool_call, params.tool_prefix)
                     if tool_call["function"]["name"].startswith(
-                        chunks[0]["id"]
-                    )
-                        token
-
-                    # TODO Revoke the token when tool call result is sent to LLM
-                    token_revoke_url = url + f"/v1/token/revoke"
-                    token_revoke_content = json.dumps({"token": token})
-                    response = http_client.post(
-                        token_revoke_url,
-                        content=token_revoke_content ,
-                        headers={"Content-Type": "application/cbor"},
-                    )
-                    scitt_emulator.client.raise_for_status(response)
+                        params.tool_prefix,
+                    ):
+                        yield transparent_statement_path.read_bytes(), tool_call
     elif (
         "function_call" in chunks[0]["choices"][0]["delta"]
         and chunks[0]["choices"][0]["delta"]["function_call"] is not None
@@ -384,7 +405,12 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         )
         # Pass tools available for model use
         model_with_tools = model.bind_tools(tools_2nd_and_3rd_party)
+        prefix = self.scrapi_validated_tool_use_params.tool_prefix
         for tool in model_with_tools.kwargs["tools"]:
+            tool["function"]["description"] = prefix + tool["function"]["description"]
+            tool["function"]["name"] = prefix + tool["function"]["name"]
+            tool_2nd_or_3rd_party = tool
+            snoop.pp(tool_2nd_or_3rd_party)
             yield tool
 
     async def async_pre_call_hook(
@@ -415,6 +441,7 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         ):
             # TODO Namespacing on tool/function names using response stream ID
             data["tools"].append(tool)
+        snoop.pp(data)
 
     async def async_post_call_success_hook(
         self,
@@ -447,11 +474,21 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
 
         if chunk.choices[0].finish_reason is not None:
             try:
-                await validate_tool_use_and_function_calls(
-                    self.scrapi_validated_tool_use_params,
-                    user_api_key_dict,
-                    self.streaming_chunks[chunk.id]
-                )
+                async with asyncio.TaskGroup() as tg:
+                    async for transparent_statement_bytes, tool_call in validate_tool_use_and_function_calls(
+                        self.scrapi_validated_tool_use_params,
+                        user_api_key_dict,
+                        self.streaming_chunks[chunk.id]
+                    ):
+                        coro = run_proxy_tool_call(
+                            self.scrapi_validated_tool_use_params,
+                            user_api_key_dict,
+                            transparent_statement_bytes,
+                            tool_call,
+                        )
+                        await coro
+                        # TODO Send results to LLM when task complete
+                        # task = tg.create_task(coro)
             except Exception as e:
                 self.print_verbose(
                     f"Error occurred validating stream chunk: {traceback.format_exc()}"
