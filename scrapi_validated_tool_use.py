@@ -31,7 +31,22 @@ import scitt_emulator.create_statement
 import scitt_emulator.client
 import scitt_emulator.did_helpers
 
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+
 import snoop
+
+
+@tool
+def historical_stock_prices(ticker: str) -> str:
+    "Get the historical stock prices for a stock ticker"
+    return json.dumps(
+        [
+            ("2024-03-22", 42.0),
+            ("2024-03-23", 52.0),
+            ("2024-03-24", 62.0),
+        ]
+    )
 
 
 class SCRAPISCRAPIInstance(LiteLLMBase, extra='forbid'):
@@ -44,7 +59,8 @@ class SCRAPISCRAPIInstance(LiteLLMBase, extra='forbid'):
     # which is the schema for the manifest. We'll shorthand that to
     # an identifier until we setup that flow and discovery via
     # json-ld and pydantic schema dump.
-    subject: Optional[str] = "validate_tool_use_and_function_calls.proxy.llm"
+    validation_subject: Optional[str] = "validation.tool.proxy.llm"
+    tool_index_subject: Optional[str] = "tool.proxy.llm"
 
 
 class LiteLLMSCRAPIValidatedToolUseParams(LiteLLMBase, extra='forbid'):
@@ -101,7 +117,7 @@ async def validate_tool_use_and_function_calls(
                     url = scrapi.url
                     # notary_issuer as None to use ephemeral key as issuer
                     issuer = scrapi.issuer
-                    subject = scrapi.subject
+                    subject = scrapi.validation_subject
                     # TODO Set content_type to json+json-schema-URN
                     # This way you can lookup a schema registered to a shorthand
                     # handle and each instance registers statements for payloads
@@ -340,6 +356,61 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         params = self.scrapi_validated_tool_use_params
         self.print_verbose(f"params: {params}")
 
+    async def aiter_tools(
+        self,
+        # TODO Control access to user tools, can we send this as the request?
+        # WIMSE https://datatracker.ietf.org/doc/bofreq-richer-wimse/ auth?
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
+    ):
+        # TODO Pull tools from from SCRAPI federation ActivityPub feed
+        # use self.scrapi_validated_tool_use_params.tool_index_subject
+        tools_2nd_and_3rd_party = [
+            historical_stock_prices,
+        ]
+        # Choose the LLM that will drive the agent
+        # Only certain models support this
+        model = ChatOpenAI(
+            model="gpt-3.5-turbo-1106",
+            temperature=0,
+            openai_api_key="no-calls-made",
+            openai_api_base="http://localhost:0/no-calls-made",
+        )
+        # Pass tools available for model use
+        model_with_tools = model.bind_tools(tools_2nd_and_3rd_party)
+        for tool in model_with_tools.kwargs["tools"]:
+            yield tool
+
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: str,  # "completion", "embeddings", "image_generation", "moderation"
+    ):
+        # Add 2nd and 3rd party tools to prompts as needed.
+        # The format of the return value of get_tools() is as follows:
+        # [{'type': 'function',
+        #   'function': {'description': 'historical_stock_prices(ticker: str) '
+        #                              '-> str - Get the historical stock '
+        #                              'prices for a stock ticker',
+        #               'name': 'historical_stock_prices',
+        #               'parameters': {'properties': {'ticker': {'type': 'string'}},
+        #                              'required': ['ticker'],
+        #                              'type': 'object'}}}]
+        if not data["tools"]:
+            snoop.pp(data)
+            raise NotImplementedError
+        async for tool in self.aiter_tools(
+            user_api_key_dict,
+            cache,
+            data,
+            call_type,
+        ):
+            data["tools"].append(tool)
+
     async def async_post_call_success_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -357,11 +428,12 @@ class LiteLLMSCRAPIValidatedToolUse(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         chunk: Any,
     ):
-        if self.scrapi_validated_tool_use_params is None:
-            return
-
-        if not isinstance(chunk, litellm.ModelResponse) or not isinstance(
-            chunk.choices[0], litellm.utils.StreamingChoices
+        if (
+            self.scrapi_validated_tool_use_params is None
+            or not isinstance(chunk, litellm.ModelResponse)
+            or not isinstance(
+                chunk.choices[0], litellm.utils.StreamingChoices
+            )
         ):
             return
 

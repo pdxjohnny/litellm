@@ -4,14 +4,13 @@ model_list:
       model: gpt-3.5-turbo-1106
 
 litellm_settings:
-  callbacks:
-    - - scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUse
-      - scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUseParams
-      - scrapi_instances:
-        # - url: 'https://scrapi.unstable.chadig.com'
-        - url: 'http://localhost:8000'
-    - - scrapi_tool_index.LiteLLMSCRAPIToolIndex
-      - scrapi_tool_index.LiteLLMSCRAPIToolIndexParams
-      - scrapi_instances:
-        # - url: 'https://scrapi.unstable.chadig.com'
-        - url: 'http://localhost:8000'
+  callbacks: scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUse
+  callback_params_cls: scrapi_validated_tool_use.LiteLLMSCRAPIValidatedToolUseParams
+  callback_params:
+    scrapi_instances:
+    # - url: 'https://scitt.unstable.chadig.com'
+    - url: 'http://localhost:8000'
+      # TODO urn of transparent statement for validation policy
+      validation_subject: 'validation.tool.proxy.llm'
+      # TODO urn of transparent statement for index policy
+      tool_index_subject: 'tool.proxy.llm'

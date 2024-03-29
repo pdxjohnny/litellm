@@ -1659,43 +1659,38 @@ def get_callback_params_kwarg(callback_cls, callback_params_cls):
 
 
 def callback_instance(
+    litellm_settings,
     value,
     config_file_path,
-    *,
-    params_cls: Optional[str] = None,
-    params: Optional[dict] = None,
 ):
-    if isinstance(value, list):
-        cls, params_cls, params = value
-        return callback_instance(
-            cls,
-            config_file_path,
-            params_cls=params_cls,
-            params=params,
-        )
-    elif not isinstance(value, str):
-        raise Exception("Both callback_params and callback_params_cls must be set or neither")
-    if params_cls is None:
+    if "callback_params" not in litellm_settings:
         return get_instance_fn(
             value=value,
             config_file_path=config_file_path,
         )
-    callback_cls = get_instance_fn(
-        value=value,
-        config_file_path=config_file_path,
-    )
-    callback_params_cls = get_instance_fn(
-        value=params_cls,
-        config_file_path=config_file_path,
-    )
-    callback_params = callback_params_cls(**params)
-    callback_params_kwarg = get_callback_params_kwarg(
-        callback_cls, callback_params_cls,
-    )
-    callback_kwargs = {
-        callback_params_kwarg: callback_params,
-    }
-    return callback_cls(**callback_kwargs)
+    elif (
+        "callback_params" in litellm_settings
+        and "callback_params_cls" in litellm_settings
+    ):
+        callback_cls = get_instance_fn(
+            value=value,
+            config_file_path=config_file_path,
+        )
+        callback_params_cls = get_instance_fn(
+            value=litellm_settings["callback_params_cls"],
+            config_file_path=config_file_path,
+        )
+        callback_params = callback_params_cls(
+            **litellm_settings["callback_params"],
+        )
+        callback_params_kwarg = get_callback_params_kwarg(
+            callback_cls, callback_params_cls,
+        )
+        callback_kwargs = {
+            callback_params_kwarg: callback_params,
+        }
+        return callback_cls(**callback_kwargs)
+    raise Exception("Both callback_params and callback_params_cls must be set or neither")
 
 
 class ProxyConfig:
@@ -2028,6 +2023,7 @@ class ProxyConfig:
                             else:
                                 imported_list.append(
                                     callback_instance(
+                                        litellm_settings=litellm_settings,
                                         value=callback,
                                         config_file_path=config_file_path,
                                     )
@@ -2036,6 +2032,7 @@ class ProxyConfig:
                     else:
                         litellm.callbacks = [
                             callback_instance(
+                                litellm_settings=litellm_settings,
                                 value=value,
                                 config_file_path=config_file_path,
                             )
