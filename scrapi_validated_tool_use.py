@@ -282,6 +282,9 @@ async def validate_tool_use_and_function_calls(
                     )
                     scitt_emulator.client.raise_for_status(response)
                     token = response.json()["token"]
+                    # Tell other callbacks that want to know validation state
+                    # that this tool has been validated and give the token.
+                    chunks[0]["choices"][0]["delta"]["tool_calls"].scrapi_validated = token
                     # TODO Enforce namespacing on tool/function names.
                     # TODO Call overlayed 2nd party tools and pass them their
                     # tokens. Somehow analyize langchain prompts similar to how we

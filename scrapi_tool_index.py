@@ -69,11 +69,33 @@ class LiteLLMSCRAPIToolIndexParams(LiteLLMBase, extra='forbid'):
     )
 
 
+async def tool_index_perform_tool_use(
+    params: LiteLLMSCRAPIToolIndexParams,
+    user_api_key_dict: UserAPIKeyAuth,
+    chunks: list,
+):
+    if (
+        "tool_calls" in chunks[0]["choices"][0]["delta"]
+        and chunks[0]["choices"][0]["delta"]["tool_calls"] is not None
+    ):
+        for tool_call in make_tool_calls_list(chunks):
+            with tempfile.TemporaryDirectory() as tempdir:
+                scrapi_validated = getattr(
+                    chunks[0]["choices"][0]["delta"]["tool_calls"],
+                    "scrapi_validated",
+                    None,
+                )
+                if scrapi_validated is None:
+                    raise Exception("Not validated, instantiate callback SCRAPIValidatedToolUse before this callback in proxy config")
+                snoop.pp(["VALID"] * 10, tool_call)
+
+
 class LiteLLMSCRAPIToolIndex(CustomLogger):
     def __init__(
         self,
         scrapi_tool_index_params: Optional[LiteLLMSCRAPIToolIndexParams] = None,
     ):
+        self.streaming_chunks = {}
         self.scrapi_tool_index_params = scrapi_tool_index_params
 
         self.llm_router: Optional[litellm.Router] = None
@@ -139,4 +161,58 @@ class LiteLLMSCRAPIToolIndex(CustomLogger):
         #               'parameters': {'properties': {'ticker': {'type': 'string'}},
         #                              'required': ['ticker'],
         #                              'type': 'object'}}}]
-        data["tools"].extend([tool async for tool in self.aiter_tools()])
+        async for tool in self.aiter_tools(
+            user_api_key_dict,
+            cache,
+            data,
+            call_type,
+        ):
+            data["tools"].append(tool)
+
+    async def async_post_call_success_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ):
+        raise NotImplementedError("TODO async_post_call_success_hook()")
+        await validate_tool_use_and_function_calls(
+            self.scrapi_tool_index_params,
+            user_api_key_dict,
+            response,
+        )
+
+    async def async_post_call_streaming_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        chunk: Any,
+    ):
+        if (
+            self.scrapi_tool_index_params is None
+            or not isinstance(chunk, litellm.ModelResponse)
+            or not isinstance(
+                chunk.choices[0], litellm.utils.StreamingChoices
+            )
+        ):
+            return
+
+        self.streaming_chunks.setdefault(chunk.id, [])
+        self.streaming_chunks[chunk.id].append(chunk)
+
+        if chunk.choices[0].finish_reason is not None:
+            try:
+                await tool_index_perform_tool_use(
+                    self.scrapi_tool_index_params,
+                    user_api_key_dict,
+                    self.streaming_chunks[chunk.id]
+                )
+            except Exception as e:
+                self.print_verbose(
+                    f"Error occurred running 2nd and 3rd party tools: {traceback.format_exc()}"
+                )
+                # TODO Filter out 2nd and 3rd party tool use issues. Auto
+                # re-submit query after notifying LLM that that tool should not
+                # be used in this context.
+                offending_tools_used = []
+                raise e
+            finally:
+                del self.streaming_chunks[chunk.id]
